@@ -3,7 +3,8 @@
 
 <image-card alt="SecureShell Architecture Banner" src="URL_PLACEHOLDER_1" ></image-card>
 
-**[UI SCREENSHOT INSTRUCTION]:** Compile and launch the executable inside a terminal window. Run a few native operations (like `pwd` or `ls`), input a dangerous keyword like `format` to trigger the crimson Bloom Filter security warning, and execute `history` to view the frequency-balanced audit tree. Take a crisp, high-resolution screenshot of the console window showcasing these colored terminal streams, and replace this placeholder with your direct image URL.
+<img width="1365" height="423" alt="image" src="https://github.com/user-attachments/assets/8f59d64f-1007-48bd-8094-35923f00d641" />
+
 
 ## 1. Executive Overview
 
