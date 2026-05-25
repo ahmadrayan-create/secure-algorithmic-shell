@@ -1,4 +1,4 @@
-```markdown
+
 # SecureShell: An Enhanced, Security-Hardened Command-Line Interface
 
 <image-card alt="SecureShell Architecture Banner" src="URL_PLACEHOLDER_1" ></image-card>
@@ -39,7 +39,6 @@ By architecting and embedding low-level, custom-implemented data structures dire
                      ▼
         [ Kernel / System Execution ]
 
-```
 
 ### Key Technical Innovations
 
