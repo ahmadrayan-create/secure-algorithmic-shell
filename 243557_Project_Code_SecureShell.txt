@@ -1,0 +1,404 @@
+#include <iostream>
+#include <fstream>
+#include <cstring>
+#include <cstdlib>
+#include <ctime>
+#include <direct.h>   //For directory operations: _chdir, _getcwd, _mkdir, _rmdir
+#include <windows.h>  //For console colors and system timing
+
+using namespace std;
+
+//System limits
+#define BLOOM_SIZE 1024
+#define HASH_TABLE_SIZE 31
+#define MAX_TRIE_CHILD 26
+#define MAX_PATH_LEN 260
+
+// Global state for the "Chroot Jail" security feature
+char initialWorkingDirectory[MAX_PATH_LEN];
+
+// 1. BLOOM FILTER (The Malware Guard)
+// Purpose: Probabilistic check to block "dangerous" commands before execution.
+// Alignment: GA-3 (Problem Analysis) - Real-world security utilization.
+
+class SecurityGuard{
+	
+    bool bitArray[BLOOM_SIZE];
+
+    public:
+	
+    SecurityGuard(){
+    	
+        for (int i = 0; i < BLOOM_SIZE; i++) bitArray[i] = false;
+    }
+
+    // Using DJB2 hash for speed and distribution
+    int hash1(const char* s){
+        unsigned long h = 5381;
+        while (*s) h = ((h << 5) + h) + *s++;
+        return h % BLOOM_SIZE;
+    }
+
+    // Using SDBM hash to minimize false positive collisions
+    int hash2(const char* s){
+    	       unsigned long h = 0;
+        while (*s) h = (*s++) + (h << 6) + (h << 16) - h;
+        return h % BLOOM_SIZE; }
+
+    void blacklist(const char* cmd){
+        bitArray[hash1(cmd)] = true;
+        bitArray[hash2(cmd)] = true; }
+
+    bool isMalicious(const char* cmd){
+        return bitArray[hash1(cmd)] && bitArray[hash2(cmd)];    
+	}
+};
+
+// 2. TRIE (The Autocomplete Indexer)
+// Purpose: Fast prefix-based lookup for command suggestions.
+// Alignment: Master implementation of linked data structures (CLO-1).
+
+struct TrieNode{
+    TrieNode* children[MAX_TRIE_CHILD];
+    bool isEndOfWord;
+
+    TrieNode(){
+    	
+        isEndOfWord = false;
+        for (int i = 0; i < MAX_TRIE_CHILD; i++) children[i] = NULL;
+        
+    }
+};
+
+class CommandIndexer{
+	
+	    TrieNode* root;
+	
+	    void findRecursive(TrieNode* node, char* prefix, int depth){
+	    	
+	        if (node->isEndOfWord) {
+	            prefix[depth] = '\0';
+	            cout << "  -> " << prefix << endl;
+	        }
+	        for (int i = 0; i < 26; i++) {
+	            if (node->children[i]) {
+	                prefix[depth] = (char)(i + 'a');
+	                findRecursive(node->children[i], prefix, depth + 1);
+	            }
+	        }
+	    }
+	
+	public:
+		
+	    CommandIndexer() { root = new TrieNode(); }
+	
+	    void insert(const char* cmd){
+	        TrieNode* curr = root;
+	        
+	        for (int i = 0; cmd[i]; i++) {
+	            int idx = tolower(cmd[i]) - 'a';
+	            if (idx < 0 || idx >= 26) continue;
+	            if (!curr->children[idx]) curr->children[idx] = new TrieNode();
+	            curr = curr->children[idx];
+	        }
+	        
+	        curr->isEndOfWord = true;
+	    }
+	
+	    void suggest(const char* partial){
+	        TrieNode* curr = root;
+	        
+	        for (int i = 0; partial[i]; i++) {
+	            int idx = tolower(partial[i]) - 'a';
+	            if (idx < 0 || idx >= 26 || !curr->children[idx]) return;
+	            curr = curr->children[idx];
+	        }
+	        
+	        char buffer[50];
+	        strcpy(buffer, partial);
+	        findRecursive(curr, buffer, strlen(partial));
+	    }
+};
+
+// 3. HASH TABLE WITH CHAINING (Command Registry)
+// Purpose: O(1) average lookup.We used chaining to satisfy Lab CLO-1.
+// Alignment: Advanced Data Structures (CLO-1/2).
+
+struct HashNode{
+	
+    char name[32];
+    void (*func)(const char*);
+    HashNode* next;
+
+    HashNode(const char* n, void (*f)(const char*)){
+    	
+        strcpy(name, n);
+        func = f;
+        next = NULL;
+    }
+};
+
+class CommandRegistry{
+	
+	    HashNode* table[HASH_TABLE_SIZE];
+	
+	    int computeHash(const char* key){
+	        int h = 0;
+	        for (int i = 0; key[i]; i++) h = (h * 37) + key[i];
+	        return (h < 0 ? -h : h) % HASH_TABLE_SIZE;
+	    }
+	
+	public:
+		
+	    CommandRegistry(){
+	    	
+	        for (int i = 0; i < HASH_TABLE_SIZE; i++) table[i] = NULL;
+	    }
+	
+	    void bind(const char* name, void (*f)(const char*)){
+	    	
+	        int idx = computeHash(name);
+	        HashNode* newNode = new HashNode(name, f);
+	        newNode->next = table[idx];
+	        table[idx] = newNode;
+	    }
+	
+	    void run(const char* name, const char* args){
+	    	
+	        int idx = computeHash(name);
+	        HashNode* curr = table[idx];
+	        
+	        while (curr) {
+	            if (strcmp(curr->name, name) == 0) {
+	                curr->func(args);
+	                return;
+	            }
+	            curr = curr->next;
+	        }
+	        cout << "\033[31mCommand '" << name << "' not found. Type 'help'.\033[0m" << endl;
+	    }
+};
+
+// 4. TREAP (Frequency-Priority History)
+// Purpose: Keeps history sorted alphabetically while prioritizing most used items.
+// Alignment: Balanced Search Trees / Priority Queues (CLO-1/2).
+
+struct TreapNode {
+    char cmdLine[128];
+    int frequency;    // Heap priority (based on usage)
+    int randomRank;   // Tie-breaker to maintain balance
+    TreapNode *left, *right;
+
+    TreapNode(const char* line) {
+        strcpy(cmdLine, line);
+        frequency = 1;
+        randomRank = rand() % 1000;
+        left = right = NULL;
+    }
+};
+
+//Treap for history with rotations
+
+class HistoryAudit {
+	    TreapNode* root;
+	
+	    TreapNode* rotateRight(TreapNode* y) {			//left rotation
+	        TreapNode *x = y->left, *T2 = x->right;
+	        x->right = y; 
+			y->left = T2;
+	        return x;
+	    }
+	
+	    TreapNode* rotateLeft(TreapNode* x) {			//right rotation
+	        TreapNode *y = x->right, *T2 = y->left;
+	        y->left = x; 
+			x->right = T2;
+	        return y;
+	    }
+	
+	    TreapNode* insert(TreapNode* node, const char* line) {
+	        if (!node) return new TreapNode(line);
+	        
+	        if (strcmp(line, node->cmdLine) == 0) {
+	            node->frequency++; // Increase priority of frequently used command
+	            return node;
+	        }
+	
+	        if (strcmp(line, node->cmdLine) < 0) {
+	            node->left = insert(node->left, line);
+	            if (node->left->frequency > node->frequency) node = rotateRight(node);
+	        } else {
+	            node->right = insert(node->right, line);
+	            if (node->right->frequency > node->frequency) node = rotateLeft(node);
+	        }
+	        return node;
+	    }
+	
+	    void display(TreapNode* node) {
+	        if (!node) return;
+	        display(node->left);
+	        cout << " [" << node->frequency << "x] " << node->cmdLine << endl;
+	        display(node->right);
+	    }
+	
+	public:
+	    HistoryAudit() { root = NULL; }
+	    void add(const char* line) { root = insert(root, line); }
+	    void show() { display(root); }
+};
+
+//GLOBAL INSTANCES
+CommandRegistry shellReg;
+CommandIndexer shellTrie;
+SecurityGuard shellShield;
+HistoryAudit shellLogs;
+
+// COMMAND LOGIC
+
+
+void cmd_help(const char*){
+    cout << "\n\033[33m--- COMMAND LIST ---\033[0m\n";
+    cout << "Basic: ls, pwd, cd, mkdir, rmdir, touch, rm, clear, exit\n";
+    cout << "System: whoami, date, echo <text>, history\n";
+    cout << "Security: encrypt <file>, decrypt <file>\n";
+}
+
+
+void cmd_pwd(const char*){				//cuurent directroy
+    char buffer[MAX_PATH_LEN];
+    _getcwd(buffer, MAX_PATH_LEN);
+    cout << buffer << endl;
+}
+
+
+void cmd_cd(const char* args){			//change directory
+    if (strlen(args) == 0) return;
+    
+    // SECURITY: Chroot Jail implementation
+    if (strcmp(args, "..") == 0) {
+        char current[MAX_PATH_LEN];
+        _getcwd(current, MAX_PATH_LEN);
+        if (strcmp(current, initialWorkingDirectory) == 0) {
+            cout << "\033[31mSecurity: You cannot navigate above the project root.\033[0m" << endl;
+            return;
+        }
+    }
+    if (_chdir(args) != 0) cout << "Error: Path not found.\n";
+}
+
+void cmd_whoami(const char*) { cout << "Attique Alvi AirUniversity_Student" << endl; }
+void cmd_date(const char*) { time_t n = time(0); cout << ctime(&n); }
+void cmd_echo(const char* args) { cout << args << endl; } //displays message
+void cmd_ls(const char*) { system("dir /b"); }  //list
+void cmd_mkdir(const char* args) { if(_mkdir(args) != 0) cout << "Failed to create directory.\n"; } //make directory
+void cmd_rmdir(const char* args) { if(_rmdir(args) != 0) cout << "Failed to remove directory.\n"; } //remove director
+void cmd_touch(const char* args) { ofstream f(args); f.close(); cout << "File " << args << " touched.\n"; } //make folder
+void cmd_rm(const char* args) { if(remove(args) != 0) cout << "Failed to remove file.\n"; } //remove file
+void cmd_clear(const char*) { system("cls"); } //clears screen
+void cmd_exit(const char*) { exit(0); }  //exit terminal
+
+void xorTransform(const char* filename){  // for encryption and decryption
+	
+    if (strlen(filename) == 0) return;
+    char key = 'S'; // Simple encryption key
+    
+    fstream file(filename, ios::in | ios::out | ios::binary);
+    if (!file) { cout << "File operation failed.\n"; return; }
+
+    char c;
+    
+    while (file.get(c)){
+        file.seekp((int)file.tellg() - 1);
+        c ^= key;
+        file.put(c);
+        file.seekg(file.tellp());
+    }
+    
+    file.close();
+    cout << "Security transformation applied to: " << filename << endl;
+    
+}
+
+// MAIN
+int main(){
+	
+    srand(time(0));
+    
+    _getcwd(initialWorkingDirectory, MAX_PATH_LEN);
+
+    // Registering 14 commands
+    shellReg.bind("help", cmd_help);
+    shellReg.bind("pwd", cmd_pwd);
+    shellReg.bind("cd", cmd_cd);
+    shellReg.bind("ls", cmd_ls);
+    shellReg.bind("mkdir", cmd_mkdir);
+    shellReg.bind("rmdir", cmd_rmdir);
+    shellReg.bind("touch", cmd_touch);
+    shellReg.bind("rm", cmd_rm);
+    shellReg.bind("whoami", cmd_whoami);
+    shellReg.bind("date", cmd_date);
+    shellReg.bind("echo", cmd_echo);
+    shellReg.bind("history", cmd_help); // Wrapper for history
+    shellReg.bind("clear", cmd_clear);
+    shellReg.bind("exit", cmd_exit);
+    shellReg.bind("encrypt", xorTransform);
+    shellReg.bind("decrypt", xorTransform);
+
+    // Indexing for Autocomplete
+    const char* list[] = {"help","pwd","cd","ls","mkdir","rmdir","touch","rm","whoami","date","echo","history","clear","exit","encrypt","decrypt"};
+    for(int i=0; i<16; i++) shellTrie.insert(list[i]);
+
+    // Blacklisting dangerous commands in Bloom Filter
+    shellShield.blacklist("format");
+    shellShield.blacklist("deltree");
+
+    system("cls");
+    cout << "\033[1;36m====================================================\033[0m" << endl;
+    cout << "\033[1;36m              SECURE ALGORITHMIC TERMINAL         \033[0m" << endl;
+    cout << "\033[1;36m====================================================\033[0m" << endl;
+
+    char inputBuffer[256];
+    while (true){
+    	
+        char path[MAX_PATH_LEN];
+        _getcwd(path, MAX_PATH_LEN);
+
+        cout << "\033[1;32mateeq@minibash\033[0m:\033[1;34m" << path << "\033[0m$ ";
+        if (!cin.getline(inputBuffer, 256)) {
+		    cout << "\n\033[31mEOF detected (Ctrl + Z). Exiting terminal safely.\033[0m\n";
+		    break;	
+		}
+		
+		if (strlen(inputBuffer) == 0) continue;
+		
+        // Malware Check (Bloom Filter)
+        if (shellShield.isMalicious(inputBuffer)) {
+            cout << "\033[31m[BLOOM FILTER] Execution blocked: Potential threat.\033[0m" << endl;
+            continue;
+        }
+
+        // Suggestions (Trie)
+        shellTrie.suggest(inputBuffer);
+
+        // Parsing
+        char cmd[64] = "", args[192] = "";
+        int i = 0;
+        
+        while(inputBuffer[i] != ' ' && inputBuffer[i] != '\0'){
+            cmd[i] = inputBuffer[i];
+            i++;
+        }
+        
+        cmd[i] = '\0';
+        if(inputBuffer[i] == ' ') strcpy(args, inputBuffer + i + 1);
+
+        // History Update (Treap)
+        shellLogs.add(cmd);
+
+        // Execution (Hash Table Chaining)
+        if (strcmp(cmd, "history") == 0) shellLogs.show();
+        else shellReg.run(cmd, args);
+    }
+
+    return 0;
+}
